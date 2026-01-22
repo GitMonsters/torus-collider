@@ -291,6 +291,8 @@ fn main() -> TorusResult<()> {
         world_model_error_threshold: 0.15,
         goal_completion_threshold: 0.55, // Lowered from 0.85 for easier completion
         symbol_grounding_threshold: 0.45, // Lowered from 0.6 for easier grounding
+        max_skills: 200,
+        counterfactual_regret_threshold: 0.1,
     };
 
     // Create agent with FULL AGI (AGIReasoningSystem + AGICore integrated)
