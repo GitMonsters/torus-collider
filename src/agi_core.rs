@@ -2662,7 +2662,12 @@ mod tests {
         let goal_id = goals.create_goal("test_goal", vec![1.0, 1.0, 1.0], GoalPriority::High);
         goals.activate_goal(goal_id);
 
-        goals.update_progress(&[0.5, 0.5, 0.5]);
+        // Use a state very far from target so goal doesn't complete
+        // Progress formula: 1.0 - (distance / max_distance)
+        // With target [1,1,1] and state [-1,-1,-1]: distance = sqrt(12) ≈ 3.46
+        // max_distance = 3 * 2 = 6, progress = 1 - 3.46/6 = 0.42
+        // With threshold 0.55, goal stays active
+        goals.update_progress(&[-1.0, -1.0, -1.0]);
 
         let summary = goals.summary();
         assert_eq!(summary.active_goals, 1);
