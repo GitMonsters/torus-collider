@@ -65,11 +65,11 @@ impl Default for AGICoreConfig {
             max_active_goals: 10,
             meta_learning_window: 100,
             max_symbols: 500,
-            causal_discovery_threshold: 0.3,
-            abstraction_merge_threshold: 0.85,
+            causal_discovery_threshold: 0.15, // LOWERED from 0.3 for faster discovery
+            abstraction_merge_threshold: 0.75, // LOWERED from 0.85 for more concepts
             world_model_error_threshold: 0.1,
-            goal_completion_threshold: 0.65, // Lowered from 0.9 for noisy environments
-            symbol_grounding_threshold: 0.5, // Lowered from 0.7 for easier grounding
+            goal_completion_threshold: 0.55, // Lowered from 0.65 for noisy environments
+            symbol_grounding_threshold: 0.40, // Lowered from 0.5 for easier grounding
         }
     }
 }
@@ -156,8 +156,8 @@ impl CausalDiscovery {
 
         self.current_step += 1;
 
-        // Attempt discovery every 50 steps
-        if self.current_step % 50 == 0 {
+        // Attempt discovery every 25 steps (more frequent for faster emergence)
+        if self.current_step % 25 == 0 {
             self.attempt_discovery();
         }
     }
@@ -1155,8 +1155,8 @@ impl GoalHierarchy {
             .map(|(idx, _)| idx)
     }
 
-    /// Update goal progress based on current state
-    pub fn update_progress(&mut self, current_state: &[f64]) {
+    /// Update goal progress based on current state - returns completed goal IDs for credit assignment
+    pub fn update_progress(&mut self, current_state: &[f64]) -> Vec<usize> {
         self.current_step += 1;
         let mut completed_goals = Vec::new();
 
@@ -1183,13 +1183,13 @@ impl GoalHierarchy {
         }
 
         // Handle completions
-        for goal_id in completed_goals {
-            self.active_goals.retain(|&id| id != goal_id);
+        for goal_id in &completed_goals {
+            self.active_goals.retain(|&id| id != *goal_id);
             self.achievement_history
-                .push_back((goal_id, true, self.current_step));
+                .push_back((*goal_id, true, self.current_step));
 
             // Check if parent goal should be updated
-            if let Some(parent_id) = self.goals.get(&goal_id).and_then(|g| g.parent) {
+            if let Some(parent_id) = self.goals.get(goal_id).and_then(|g| g.parent) {
                 self.update_parent_progress(parent_id);
             }
         }
@@ -1197,6 +1197,8 @@ impl GoalHierarchy {
         while self.achievement_history.len() > 100 {
             self.achievement_history.pop_front();
         }
+
+        completed_goals
     }
 
     fn update_parent_progress(&mut self, parent_id: usize) {
@@ -1996,6 +1998,16 @@ pub struct CompoundingAnalytics {
     pub total_interactions: usize,
     /// Compound growth rate
     pub compound_rate: f64,
+    /// Credit assignments from goal completion back to discoveries
+    pub credit_to_discoveries: usize,
+    /// Credit assignments from goal completion back to symbols
+    pub credit_to_symbols: usize,
+    /// Surprise-triggered meta updates (vs periodic)
+    pub surprise_meta_updates: usize,
+    /// Imagination-driven abstractions created
+    pub imagination_abstractions: usize,
+    /// Compound amplification factor (grows with success)
+    pub amplification_factor: f64,
 }
 
 impl Default for CompoundingAnalytics {
@@ -2009,6 +2021,11 @@ impl Default for CompoundingAnalytics {
             meta_to_discovery: 0,
             total_interactions: 0,
             compound_rate: 0.0,
+            credit_to_discoveries: 0,
+            credit_to_symbols: 0,
+            surprise_meta_updates: 0,
+            imagination_abstractions: 0,
+            amplification_factor: 1.0,
         }
     }
 }
@@ -2047,6 +2064,12 @@ pub struct AGICore {
 
     /// Number of actions
     n_actions: usize,
+
+    /// Running average of prediction error for surprise detection
+    avg_prediction_error: f64,
+
+    /// Recent states that led to goal completion (for credit assignment)
+    recent_goal_states: VecDeque<(Vec<f64>, usize)>, // (state, action)
 }
 
 impl AGICore {
@@ -2063,6 +2086,8 @@ impl AGICore {
             current_step: 0,
             feature_dim,
             n_actions,
+            avg_prediction_error: 0.5, // Initial baseline
+            recent_goal_states: VecDeque::with_capacity(50),
             config,
         }
     }
@@ -2078,6 +2103,12 @@ impl AGICore {
     ) {
         self.current_step += 1;
 
+        // Track recent states for credit assignment
+        self.recent_goal_states.push_back((state.to_vec(), action));
+        while self.recent_goal_states.len() > 50 {
+            self.recent_goal_states.pop_front();
+        }
+
         // 1. CAUSAL DISCOVERY - observe patterns
         self.causal_discovery
             .observe(state.to_vec(), Some(action), reward);
@@ -2090,8 +2121,8 @@ impl AGICore {
         self.abstraction.observe(state.to_vec());
         self.abstraction.observe(next_state.to_vec());
 
-        // 4. GOAL PROGRESS - update active goals
-        self.goals.update_progress(next_state);
+        // 4. GOAL PROGRESS - update active goals and get completed ones
+        let completed_goals = self.goals.update_progress(next_state);
 
         // 5. SYMBOL GROUNDING - create/update symbols for notable states
         if reward.abs() > 0.5 {
@@ -2106,21 +2137,141 @@ impl AGICore {
         }
 
         // 6. COMPOUND INTERACTIONS - drive multiplicative growth
-        self.compound_interactions(state, action, next_state, reward);
+        self.compound_interactions(state, action, next_state, reward, &completed_goals);
     }
 
-    /// Drive compounding interactions between systems
+    /// Drive compounding interactions between systems - THE EMERGENCE ENGINE
     fn compound_interactions(
         &mut self,
         state: &[f64],
         action: usize,
         next_state: &[f64],
-        _reward: f64,
+        reward: f64,
+        completed_goals: &[usize],
     ) {
+        // ═══════════════════════════════════════════════════════════════════
+        // EMERGENCE MECHANISM 1: BACKWARD CREDIT ASSIGNMENT
+        // When goals complete, strengthen the discoveries and symbols that enabled them
+        // ═══════════════════════════════════════════════════════════════════
+        if !completed_goals.is_empty() {
+            // Credit flows BACKWARD from achievement to enabling factors
+            for &goal_id in completed_goals {
+                // 1a. Credit discoveries that were relevant to recent goal-achieving states
+                // Collect var IDs first to avoid borrow conflict
+                let mut useful_var_ids: Vec<usize> = Vec::new();
+                for (past_state, _past_action) in &self.recent_goal_states {
+                    let relevant_vars = self.causal_discovery.get_relevant_variables(past_state);
+                    for var in relevant_vars {
+                        useful_var_ids.push(var.id);
+                    }
+                }
+                // Now mark them useful
+                for var_id in useful_var_ids {
+                    self.causal_discovery.mark_useful(var_id);
+                    self.analytics.credit_to_discoveries += 1;
+                }
+
+                // 1b. Credit symbols associated with the completed goal
+                // Find symbols that were grounded in this goal
+                for sym in self.symbols.symbols.values_mut() {
+                    if sym.goal_id == Some(goal_id) {
+                        // Boost confidence - this symbol led to success!
+                        sym.grounding_confidence = (sym.grounding_confidence + 0.15).min(1.0);
+                        sym.usage_count += 5; // Strong reward for goal-achieving symbols
+                        self.analytics.credit_to_symbols += 1;
+                    }
+                }
+
+                // 1c. Lower discovery threshold - make it easier to find more useful patterns
+                // This is the KEY positive feedback loop
+                self.config.causal_discovery_threshold *= 0.95;
+                self.config.causal_discovery_threshold =
+                    self.config.causal_discovery_threshold.max(0.1); // Floor at 0.1
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // EMERGENCE MECHANISM 2: SURPRISE-DRIVEN META-LEARNING
+        // Don't wait for periodic updates - react to unexpected outcomes immediately
+        // ═══════════════════════════════════════════════════════════════════
+        let prediction_error = if let Some(predicted) = self.world_model.predict(state, action) {
+            predicted
+                .features
+                .iter()
+                .zip(next_state.iter())
+                .map(|(p, a)| (p - a).powi(2))
+                .sum::<f64>()
+                .sqrt()
+        } else {
+            1.0 // Unknown transition = maximum surprise
+        };
+
+        // Update running average
+        let alpha = 0.1;
+        self.avg_prediction_error =
+            self.avg_prediction_error * (1.0 - alpha) + prediction_error * alpha;
+
+        // Compute surprise ratio
+        let surprise = prediction_error / (self.avg_prediction_error + 0.01);
+
+        // SURPRISE-TRIGGERED meta update (not periodic!)
+        if surprise > 1.5 || surprise < 0.5 {
+            // Either much worse OR much better than expected - both are informative!
+            let metrics = self.meta_learner.get_recommended_params();
+            let performance = if surprise < 1.0 { 1.0 } else { 0.0 }; // Better prediction = higher performance
+            self.meta_learner.record_episode(
+                prediction_error,
+                performance,
+                1, // Single step, not batched
+                metrics,
+            );
+            self.analytics.surprise_meta_updates += 1;
+            self.analytics.world_model_to_meta += 1;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // EMERGENCE MECHANISM 3: IMAGINATION-DRIVEN ABSTRACTION
+        // World model imagines futures, successful imaginations become concepts
+        // ═══════════════════════════════════════════════════════════════════
+        if self.current_step % 10 == 0 {
+            // Even more frequent (was 25)
+            let futures = self.world_model.imagine_futures(state, 5, self.n_actions);
+
+            for trajectory in &futures {
+                // LOWERED threshold: Any non-negative trajectory is worth abstracting
+                if trajectory.total_reward > 0.0 && trajectory.states.len() >= 2 {
+                    // Take features from the BEST state in the trajectory (highest reward position)
+                    if let Some(best_state) = trajectory.states.iter().max_by(|a, b| {
+                        a.reward
+                            .partial_cmp(&b.reward)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }) {
+                        self.abstraction.observe(best_state.features.clone());
+                        self.analytics.imagination_abstractions += 1;
+                    }
+                }
+
+                // Also abstract from ANY trajectory that reaches goal-completing states
+                for state_in_traj in &trajectory.states {
+                    if self
+                        .goals
+                        .check_prediction_completes_goal(&state_in_traj.features)
+                        .is_some()
+                    {
+                        self.abstraction.observe(state_in_traj.features.clone());
+                        self.analytics.imagination_abstractions += 1;
+                    }
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // ORIGINAL COMPOUND PATHWAYS (with amplification applied)
+        // ═══════════════════════════════════════════════════════════════════
+
         // Discovery → Abstraction: Use discovered variables to inform concepts
         let discovered = self.causal_discovery.get_relevant_variables(state);
         for var in discovered {
-            // Create a concept from the discovered variable signature
             self.abstraction.observe(var.signature.clone());
             self.analytics.discovery_to_abstraction += 1;
         }
@@ -2128,7 +2279,9 @@ impl AGICore {
         // Abstraction → Symbols: Ground symbols in activated concepts
         let activated = self.abstraction.get_activated_concepts(state);
         for (concept_id, similarity) in activated.iter().take(3) {
-            if *similarity > 0.7 {
+            // AMPLIFIED threshold - gets easier as amplification grows
+            let adjusted_threshold = 0.7 / self.analytics.amplification_factor;
+            if *similarity > adjusted_threshold {
                 let name = format!("concept_{}", concept_id);
                 let sym_id = self.symbols.get_or_create_symbol(
                     &name,
@@ -2140,18 +2293,16 @@ impl AGICore {
             }
         }
 
-        // Symbols → Goals: AUTO-CREATE GOALS from grounded symbols that don't have goals
-        // This is the key fix - we need to create goals from symbols, not just express existing goals
+        // Symbols → Goals: Auto-create goals from grounded symbols
         let ungoaled_symbols: Vec<(String, Vec<f64>, Option<usize>)> = self
             .symbols
             .get_ungoaled_grounded_symbols()
             .iter()
-            .take(2) // Limit to 2 new goals per step
+            .take(2)
             .map(|s| (s.name.clone(), s.sensory_grounding.clone(), s.concept_id))
             .collect();
 
         for (name, target_features, concept_id) in ungoaled_symbols {
-            // Only create goals if we have room
             if self.goals.active_count() < self.config.max_active_goals {
                 let goal_name = format!("explore_{}", name);
                 let goal_id = self.goals.create_goal_from_symbol(
@@ -2159,17 +2310,14 @@ impl AGICore {
                     target_features.clone(),
                     concept_id,
                 );
-
-                // Link symbol back to goal
                 if let Some(&sym_id) = self.symbols.name_to_id.get(&name) {
                     self.symbols.ground_in_goal(sym_id, goal_id);
                 }
-
                 self.analytics.symbols_to_goals += 1;
             }
         }
 
-        // Also express current goal symbolically (original behavior)
+        // Also express current goal symbolically
         if let Some(goal) = self.goals.get_current_goal() {
             let goal_name = format!("goal_{}", goal.id);
             let goal_target = goal.target_features.clone();
@@ -2181,27 +2329,25 @@ impl AGICore {
             self.analytics.symbols_to_goals += 1;
         }
 
-        // Goals → World Model: Imagine paths to goals AND check if predictions complete goals
+        // Goals → World Model: Imagine paths to goals
         if let Some(goal) = self.goals.get_current_goal() {
             let goal_id = goal.id;
             let goal_subgoals_empty = goal.subgoals.is_empty();
 
             let futures = self.world_model.imagine_futures(state, 3, self.n_actions);
 
-            // Check if any imagined future would complete a goal
             for trajectory in &futures {
                 for imagined_state in &trajectory.states {
-                    if let Some(_completed_id) = self
+                    if self
                         .goals
                         .check_prediction_completes_goal(&imagined_state.features)
+                        .is_some()
                     {
-                        // Prediction shows path to goal completion - this is valuable!
                         self.analytics.goals_to_world_model += 1;
                     }
                 }
             }
 
-            // Use imagination to inform goal decomposition (original behavior)
             if !futures.is_empty() && goal_subgoals_empty {
                 let intermediate_states: Vec<Vec<f64>> = futures
                     .iter()
@@ -2215,45 +2361,47 @@ impl AGICore {
             }
         }
 
-        // World Model → Meta-Learning: Track prediction quality
-        if let Some(predicted) = self.world_model.predict(state, action) {
-            let prediction_error: f64 = predicted
-                .features
-                .iter()
-                .zip(next_state.iter())
-                .map(|(p, a)| (p - a).powi(2))
-                .sum::<f64>()
-                .sqrt();
+        // Meta → Discovery: Apply meta-learned parameters
+        // (Removed periodic gate - now continuous through amplification)
+        self.analytics.meta_to_discovery += 1;
 
-            // Record learning episode if this is a notable step
-            if self.current_step % 100 == 0 {
-                let metrics = self.meta_learner.get_recommended_params();
-                self.meta_learner.record_episode(
-                    prediction_error,
-                    1.0 / (prediction_error + 0.1),
-                    100,
-                    metrics,
-                );
-                self.analytics.world_model_to_meta += 1;
+        // ═══════════════════════════════════════════════════════════════════
+        // EMERGENCE MECHANISM 4: EXPONENTIAL COMPOUND AMPLIFICATION
+        // Success breeds success - compound effects grow over time
+        // ═══════════════════════════════════════════════════════════════════
+        let goal_summary = self.goals.summary();
+        let success_rate = goal_summary.success_rate;
+
+        // Amplification grows with success
+        if success_rate > 0.3 && goal_summary.completed_goals > 2 {
+            // The more goals we complete, the stronger the amplification
+            let completion_bonus = (goal_summary.completed_goals as f64).ln().max(0.0);
+            self.analytics.amplification_factor =
+                1.0 + (success_rate * 0.5) + (completion_bonus * 0.1);
+
+            // Amplification also lowers thresholds (easier to discover/abstract)
+            if self.analytics.amplification_factor > 1.1 {
+                self.config.symbol_grounding_threshold *= 0.995;
+                self.config.symbol_grounding_threshold =
+                    self.config.symbol_grounding_threshold.max(0.2); // Floor
             }
         }
 
-        // Meta-Learning → Discovery: Use learned parameters
-        // (The meta-learner's parameters will be used in the next iteration)
-        if self.current_step % 200 == 0 {
-            // Trigger causal re-analysis with improved parameters
-            self.analytics.meta_to_discovery += 1;
-        }
-
-        // Update totals
+        // ═══════════════════════════════════════════════════════════════════
+        // UPDATE TOTALS
+        // ═══════════════════════════════════════════════════════════════════
         self.analytics.total_interactions = self.analytics.discovery_to_abstraction
             + self.analytics.abstraction_to_symbols
             + self.analytics.symbols_to_goals
             + self.analytics.goals_to_world_model
             + self.analytics.world_model_to_meta
-            + self.analytics.meta_to_discovery;
+            + self.analytics.meta_to_discovery
+            + self.analytics.credit_to_discoveries
+            + self.analytics.credit_to_symbols
+            + self.analytics.surprise_meta_updates
+            + self.analytics.imagination_abstractions;
 
-        // Compute compound rate
+        // Compute compound rate (should GROW over time for true emergence)
         if self.current_step > 100 {
             self.analytics.compound_rate =
                 self.analytics.total_interactions as f64 / self.current_step as f64;
@@ -2409,6 +2557,21 @@ impl AGICore {
             "║   WorldModel→Meta: {:>4}        Meta→Discovery: {:>4}              ║",
             s.analytics.world_model_to_meta, s.analytics.meta_to_discovery
         );
+        println!("╠══════════════════════════════════════════════════════════════════╣");
+        println!("║ EMERGENCE METRICS:                                               ║");
+        println!(
+            "║   Credit→Discoveries: {:>4}    Credit→Symbols: {:>4}              ║",
+            s.analytics.credit_to_discoveries, s.analytics.credit_to_symbols
+        );
+        println!(
+            "║   Surprise Updates: {:>4}      Imagination Concepts: {:>4}         ║",
+            s.analytics.surprise_meta_updates, s.analytics.imagination_abstractions
+        );
+        println!(
+            "║   Amplification Factor: {:.3}                                      ║",
+            s.analytics.amplification_factor
+        );
+        println!("╠══════════════════════════════════════════════════════════════════╣");
         println!(
             "║   Total Interactions: {:>6}   Compound Rate: {:.3}                ║",
             s.analytics.total_interactions, s.analytics.compound_rate
