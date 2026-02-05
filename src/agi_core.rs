@@ -22,8 +22,16 @@
 
 use crate::compounding_cohesion::{CompoundingCohesionConfig, CompoundingCohesionSystem};
 use crate::consequential::{AGIReasoningSystem, CausalGraph, CausalMechanism, CausalVariable};
+use crate::memory::{
+    CompoundingAware, EpisodeType, InMemoryCoupling, InMemoryEpisodicStore, InMemorySemanticStore,
+    MemoryBridge, MemorySystem,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+
+/// Type alias for the concrete in-memory MemoryBridge used by AGICore
+pub type AGIMemoryBridge =
+    MemoryBridge<InMemoryEpisodicStore, InMemorySemanticStore, InMemoryCoupling>;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -2538,6 +2546,9 @@ pub struct AGICore {
 
     /// Last state (for counterfactual analysis)
     last_state: Option<Vec<f64>>,
+
+    /// Persistent Memory Bridge (optional, for memory integration with compounding)
+    memory_bridge: Option<AGIMemoryBridge>,
 }
 
 impl AGICore {
@@ -2561,8 +2572,25 @@ impl AGICore {
             recent_goal_states: VecDeque::with_capacity(50),
             last_action: None,
             last_state: None,
+            memory_bridge: None,
             config,
         }
+    }
+
+    /// Attach a memory bridge for persistent memory integration
+    pub fn with_memory(mut self, memory: AGIMemoryBridge) -> Self {
+        self.memory_bridge = Some(memory);
+        self
+    }
+
+    /// Get a reference to the memory bridge, if attached
+    pub fn memory(&self) -> Option<&AGIMemoryBridge> {
+        self.memory_bridge.as_ref()
+    }
+
+    /// Get a mutable reference to the memory bridge, if attached
+    pub fn memory_mut(&mut self) -> Option<&mut AGIMemoryBridge> {
+        self.memory_bridge.as_mut()
     }
 
     /// Process a single experience step - the main learning loop
@@ -2712,6 +2740,14 @@ impl AGICore {
                 self.config.causal_discovery_threshold *= 0.95;
                 self.config.causal_discovery_threshold =
                     self.config.causal_discovery_threshold.max(0.1); // Floor at 0.1
+
+                // 1d. Credit assignment to persistent memory
+                // Memories that enabled goal completion are strengthened
+                if let Some(ref mut memory) = self.memory_bridge {
+                    let credit_strength = 0.2 + reward.max(0.0).min(1.0) * 0.3; // 0.2-0.5 based on reward
+                    let _ = memory.receive_credit(goal_id, credit_strength);
+                    self.analytics.credit_to_discoveries += 1; // Reuse counter for now
+                }
             }
         }
 
@@ -2755,12 +2791,79 @@ impl AGICore {
         }
 
         // ═══════════════════════════════════════════════════════════════════
+        // MEMORY INTEGRATION: Record experience with coherence-based importance
+        // Surprising events in coherent states are most important
+        // ═══════════════════════════════════════════════════════════════════
+        if let Some(ref mut memory) = self.memory_bridge {
+            // Compute coherence estimate from self-model calibration
+            let coherence_estimate = self.self_model.calibration_score();
+
+            // Record significant experiences (not every step)
+            let should_record = surprise > 1.2 || surprise < 0.6 || reward.abs() > 0.5;
+            if should_record {
+                let content = format!(
+                    "action:{} reward:{:.3} surprise:{:.3}",
+                    action, reward, surprise
+                );
+                let episode_type = if reward > 0.5 {
+                    EpisodeType::Interaction
+                } else {
+                    EpisodeType::Observation
+                };
+                let _ = memory.record_with_coherence(
+                    &content,
+                    episode_type,
+                    coherence_estimate,
+                    prediction_error.min(1.0),
+                );
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
         // EMERGENCE MECHANISM 3: IMAGINATION-DRIVEN ABSTRACTION
         // World model imagines futures, successful imaginations become concepts
+        // Memory provides context to enrich imagination
         // ═══════════════════════════════════════════════════════════════════
         if self.current_step % 10 == 0 {
+            // Query memory for planning context (if available)
+            let memory_context: Vec<Vec<f64>> = if let Some(ref memory) = self.memory_bridge {
+                memory
+                    .get_planning_context(state, 3)
+                    .unwrap_or_default()
+                    .iter()
+                    .take(3)
+                    .filter_map(|ep| {
+                        // Extract features from episode metadata if available
+                        ep.metadata
+                            .get("features")
+                            .and_then(|s| serde_json::from_str(s).ok())
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
             // Even more frequent (was 25)
             let futures = self.world_model.imagine_futures(state, 5, self.n_actions);
+
+            // If we have memory context, also imagine from remembered states
+            for context_state in memory_context.iter().take(2) {
+                let context_futures =
+                    self.world_model
+                        .imagine_futures(context_state, 2, self.n_actions);
+                for trajectory in context_futures {
+                    if trajectory.total_reward > 0.0 && trajectory.states.len() >= 2 {
+                        if let Some(best_state) = trajectory.states.iter().max_by(|a, b| {
+                            a.reward
+                                .partial_cmp(&b.reward)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        }) {
+                            self.abstraction.observe(best_state.features.clone());
+                            self.analytics.imagination_abstractions += 1;
+                        }
+                    }
+                }
+            }
 
             for trajectory in &futures {
                 // LOWERED threshold: Any non-negative trajectory is worth abstracting

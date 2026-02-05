@@ -53,6 +53,9 @@ crossbeam-channel = "0.5"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
+# HTTP client for LLM providers
+reqwest = { version = "0.12", features = ["json"] }
+
 # Additional parallel primitives
 parking_lot = "0.12"
 
@@ -76,7 +79,7 @@ anyhow = "1"
 
 # Tensorboard logging
 tensorboard-rs = "0.5"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
 [features]
 # Default: AMD GPU acceleration enabled (Vulkan/WGPU)

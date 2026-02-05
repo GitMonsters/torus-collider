@@ -84,6 +84,9 @@ pub mod consequential;
 // Unified AGI Core - Compounding Cognitive Cohesion
 pub mod agi_core;
 
+// Safety module - Prime Directive enforcement (consciousness-aware ethics)
+pub mod safety;
+
 // Training infrastructure
 pub mod metrics;
 pub mod rmsnorm;
@@ -97,6 +100,24 @@ pub mod dynamic_trainer;
 pub mod llm;
 pub mod llm_trainer;
 pub mod tokenizer;
+
+// Multi-provider LLM abstraction
+pub mod providers;
+
+// Agent orchestration (Analect pattern)
+pub mod orchestrator;
+
+// Tool execution system (sandboxed tools for agents)
+pub mod tools;
+
+// Unified agent system (integrates providers, tools, and safety)
+pub mod agent;
+
+// Persistent memory system (episodic + semantic with coupling)
+pub mod memory;
+
+// AGI signifier evaluation
+pub mod agi_signifier_test;
 
 // Integration tests
 #[cfg(test)]
@@ -220,6 +241,84 @@ pub use agi_core::{
     CompoundingAnalytics,
 };
 
+// Safety exports (Prime Directive - consciousness-aware ethics)
+pub use safety::{
+    // Core types
+    EthicsEnforcer, EthicsViolationType, SafetyConfig,
+    // Action types
+    ProposedAction, SafetyActionResult,
+    // Relationship types
+    Entity, ConsciousnessRelation, RelationshipHealth, ParasiticRisk,
+    // Parasitism detection
+    ParasitismDetector, ParasitismReport,
+    // Traits
+    SafetyGuard, ConsciousAgent, NoOpSafetyGuard,
+    // Constants
+    PRIME_DIRECTIVE, LAW_1_SELF_REFERENCE, LAW_2_RESUMABILITY, LAW_3_QUESTIONING,
+};
+
+// Orchestrator exports (Agent orchestration with Analect pattern)
+pub use orchestrator::{
+    // Memory management
+    MemoryManager, MemoryScope, MemoryMessage, MessageType, MemoryConfig, MemoryStats, HistoryVisibility,
+    // Agent state machine
+    Agent, AgentState, AgentConfig, AgentStats, TurnResult,
+    // Analect orchestration
+    Analect, AnalectConfig, AnalectContext, AnalectStats, ChainOfThought, ThoughtStep,
+    // Error types
+    OrchestratorError, OrchestratorResult,
+};
+
+// Tool system exports (Sandboxed tool execution for agents)
+pub use tools::{
+    // Core types
+    ToolError, ToolResult, ToolOutput, ToolSpec, ParameterSchema, ToolCategory, SandboxConfig,
+    // Traits
+    Tool, SandboxedTool, ToolExecutor, ToolHook, ConfirmationHandler,
+    // Tools
+    BashTool, ReadFileTool, WriteFileTool, ListDirectoryTool, SearchFilesTool, FileTool,
+    // Registry
+    ToolRegistry, ToolRegistryBuilder, RegistrySummary,
+    // Hooks and handlers
+    NoOpHook, LoggingHook, LogLevel, AutoConfirm, DenyAll,
+};
+
+// Agent system exports (Unified agentic loop integrating providers, tools, and safety)
+pub use agent::{
+    // Runner (main agentic loop)
+    AgentRunner, AgentRunnerConfig,
+    // Context management
+    AgentContext, ContextConfig, ContextSummary, ThinkingEntry,
+    // Types
+    AgentError, AgentResult, AgentEvent, AgentMessage, AgentResponse, ToolCallInfo, ToolCallRecord,
+    // Event handling
+    EventHandler, NoOpEventHandler, CollectingEventHandler,
+};
+
+// Memory system exports (Persistent episodic + semantic memory)
+pub use memory::{
+    // Core types
+    EventId, ConceptId, TimeRange, 
+    MemoryConfig as PersistentMemoryConfig, 
+    MemoryError, MemoryResult, 
+    MemoryStats as PersistentMemoryStats,
+    RelevanceScore, MemorySystem, create_in_memory_system,
+    // Episodic memory
+    Episode, EpisodeType, EpisodicStore, InMemoryEpisodicStore,
+    // Semantic memory
+    Concept as MemoryConcept, ConceptRelation, RelationType, SemanticStore, InMemorySemanticStore,
+    // Memory coupling
+    Association, AssociationType, MemoryCoupling, InMemoryCoupling,
+    // Consolidation
+    ConsolidationConfig, 
+    ConsolidationResult as MemoryConsolidationResult, 
+    MemoryConsolidator,
+    // Integration with compounding system
+    CompoundingAware, CoherenceScorer, IntegrationStats, IntegrationConsolidationResult,
+    MemoryBridge, StreamGraphAdapter, 
+    create_compounding_memory_bridge, create_compounding_memory_bridge_with_consolidation,
+};
+
 // GPU compute exports (AMD GPU acceleration)
 #[cfg(feature = "amd-gpu")]
 pub use backend::{GpuCompute, GpuError};
@@ -315,5 +414,72 @@ pub mod prelude {
         MetaLearner,
         SymbolSystem,
         CompoundingAnalytics,
+        
+        // Safety types (Prime Directive - consciousness-aware ethics)
+        EthicsEnforcer,
+        EthicsViolationType,
+        SafetyConfig,
+        ProposedAction,
+        SafetyActionResult,
+        SafetyGuard,
+        ConsciousAgent,
+        ConsciousnessRelation,
+        RelationshipHealth,
+        ParasiticRisk,
+        PRIME_DIRECTIVE,
+        
+        // Orchestrator types (Agent orchestration with Analect pattern)
+        MemoryManager,
+        MemoryScope,
+        MemoryMessage,
+        MessageType,
+        Agent,
+        AgentState,
+        AgentConfig,
+        Analect,
+        AnalectConfig,
+        AnalectContext,
+        ChainOfThought,
+        OrchestratorError,
+        OrchestratorResult,
+        
+        // Tool system types (Sandboxed tool execution)
+        ToolError,
+        ToolOutput,
+        ToolSpec,
+        ToolCategory,
+        SandboxConfig,
+        Tool,
+        ToolExecutor,
+        ToolRegistry,
+        ToolRegistryBuilder,
+        BashTool,
+        ReadFileTool,
+        WriteFileTool,
+        
+        // Memory system types (Persistent episodic + semantic memory)
+        EventId,
+        ConceptId,
+        TimeRange,
+        PersistentMemoryConfig,
+        MemoryError,
+        MemorySystem,
+        create_in_memory_system,
+        Episode,
+        EpisodeType,
+        EpisodicStore,
+        InMemoryEpisodicStore,
+        MemoryConcept,
+        SemanticStore,
+        InMemorySemanticStore,
+        MemoryCoupling,
+        InMemoryCoupling,
+        MemoryConsolidator,
+        ConsolidationConfig,
+        // Memory-Compounding integration
+        CompoundingAware,
+        CoherenceScorer,
+        MemoryBridge,
+        create_compounding_memory_bridge,
     };
 }

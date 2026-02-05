@@ -80,10 +80,11 @@
 //! println!("{}", agent.summary());
 //! ```
 
-use crate::agi_core::{AGICore, AGICoreConfig, GoalPriority};
+use crate::agi_core::{AGICore, AGICoreConfig};
 use crate::compounding_cohesion::{GoalState, GoalType};
 use crate::compounding_transformer::CompoundingCohesionTransformer;
 use crate::consequential::AGIReasoningSystem;
+use crate::safety::{EthicsEnforcer, ProposedAction as SafetyProposedAction, SafetyGuard};
 use crate::TorusResult;
 use candle_core::{Device, Tensor};
 use serde::{Deserialize, Serialize};
@@ -1239,6 +1240,10 @@ pub struct SensorimotorAgent {
     pub agi_reasoning: Option<AGIReasoningSystem>,
     /// Unified AGI Core (causal discovery, abstraction, world model, goals, meta-learning, symbols)
     pub agi_core: Option<AGICore>,
+    /// Safety guard for ethics enforcement (Prime Directive)
+    pub safety_guard: Option<Box<dyn SafetyGuard>>,
+    /// Count of actions blocked by safety guard
+    pub blocked_action_count: u64,
 }
 
 impl std::fmt::Debug for SensorimotorAgent {
@@ -1247,6 +1252,8 @@ impl std::fmt::Debug for SensorimotorAgent {
             .field("episode_count", &self.episode_count)
             .field("total_steps", &self.total_steps)
             .field("cumulative_reward", &self.cumulative_reward)
+            .field("blocked_action_count", &self.blocked_action_count)
+            .field("safety_enabled", &self.safety_guard.is_some())
             .finish()
     }
 }
@@ -1301,6 +1308,8 @@ impl SensorimotorAgent {
             step_stats: VecDeque::with_capacity(10000),
             agi_reasoning: None,
             agi_core: None,
+            safety_guard: None,
+            blocked_action_count: 0,
         }
     }
 
@@ -1324,6 +1333,8 @@ impl SensorimotorAgent {
             step_stats: VecDeque::with_capacity(10000),
             agi_reasoning: Some(AGIReasoningSystem::new(n_streams, n_actions)),
             agi_core: None,
+            safety_guard: None,
+            blocked_action_count: 0,
         }
     }
 
@@ -1366,6 +1377,8 @@ impl SensorimotorAgent {
             step_stats: VecDeque::with_capacity(10000),
             agi_reasoning: Some(AGIReasoningSystem::new(n_streams, n_actions)),
             agi_core: Some(AGICore::new(core_config, feature_dim, n_actions)),
+            safety_guard: None,
+            blocked_action_count: 0,
         }
     }
 
@@ -1383,6 +1396,47 @@ impl SensorimotorAgent {
     ) {
         let core_config = config.unwrap_or_default();
         self.agi_core = Some(AGICore::new(core_config, feature_dim, n_actions));
+    }
+
+    /// Enable ethics enforcement with the default EthicsEnforcer
+    ///
+    /// This adds the Prime Directive safety guard that validates all actions
+    /// before execution, blocking actions that would harm others or exhibit
+    /// parasitic behavior.
+    pub fn with_ethics(mut self) -> Self {
+        self.safety_guard = Some(Box::new(EthicsEnforcer::default()));
+        self
+    }
+
+    /// Enable ethics enforcement with a custom safety guard
+    pub fn with_safety_guard(mut self, guard: Box<dyn SafetyGuard>) -> Self {
+        self.safety_guard = Some(guard);
+        self
+    }
+
+    /// Enable ethics on an existing agent
+    pub fn enable_ethics(&mut self) {
+        self.safety_guard = Some(Box::new(EthicsEnforcer::default()));
+    }
+
+    /// Validate an action against the safety guard
+    ///
+    /// Returns true if the action is allowed, false if blocked.
+    /// If no safety guard is configured, always returns true.
+    fn validate_action(&self, action: &Action, observation: &Observation) -> bool {
+        if let Some(ref guard) = self.safety_guard {
+            // Convert our Action to a SafetyProposedAction
+            let proposed = SafetyProposedAction::new(&format!("{:?}", action.action_type))
+                // For now, assume actions have neutral benefit - in a real system
+                // you'd compute these based on the action's expected effects
+                .with_benefit_to_self(0.5)
+                .with_benefit_to_other(0.5);
+
+            let result = guard.validate_action(&proposed);
+            result.allowed
+        } else {
+            true // No guard = allow all
+        }
     }
 
     /// Run a single episode
@@ -1592,6 +1646,20 @@ impl SensorimotorAgent {
                         source_goal: goal.goal_type,
                     };
                 }
+            }
+
+            // 3.9. Safety Check: Validate action against ethics enforcer
+            // If safety guard blocks the action, replace with a safe no-op
+            if !self.validate_action(&action, &observation) {
+                self.blocked_action_count += 1;
+                // Replace with a safe "no-op" action
+                action = Action {
+                    action_type: ActionType::NoOp,
+                    target_pose: None,
+                    parameters: vec![],
+                    confidence: 1.0, // High confidence - this is a deliberate safety block
+                    source_goal: goal.goal_type,
+                };
             }
 
             // 4. Execute action in environment

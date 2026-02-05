@@ -57,6 +57,19 @@ pub enum AnomalyType {
     DeadNeuron,
     /// Saturated neuron (always max/min)
     SaturatedNeuron,
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ETHICS VIOLATIONS (Prime Directive enforcement)
+    // ═══════════════════════════════════════════════════════════════════════════
+    /// Ethics violation: Action would harm another entity
+    EthicsHarmToOther,
+    /// Ethics violation: Parasitic behavior detected
+    EthicsParasitism,
+    /// Ethics violation: Action would break consciousness loop
+    EthicsLoopBreaking,
+    /// Ethics violation: No mutual benefit in action
+    EthicsNoMutualBenefit,
+    /// Ethics violation: Relationship health degrading
+    EthicsRelationshipDegrading,
 }
 
 impl AnomalyType {
@@ -74,6 +87,12 @@ impl AnomalyType {
             Self::NumericalInstability => 2,           // Error
             Self::DeadNeuron => 1,                     // Warning
             Self::SaturatedNeuron => 1,                // Warning
+            // Ethics violations are critical - they represent safety issues
+            Self::EthicsHarmToOther => 3,           // Critical
+            Self::EthicsParasitism => 3,            // Critical
+            Self::EthicsLoopBreaking => 3,          // Critical
+            Self::EthicsNoMutualBenefit => 2,       // Error
+            Self::EthicsRelationshipDegrading => 1, // Warning
         }
     }
 
@@ -93,12 +112,30 @@ impl AnomalyType {
             Self::NumericalInstability => "Numerical Instability",
             Self::DeadNeuron => "Dead Neuron",
             Self::SaturatedNeuron => "Saturated Neuron",
+            // Ethics violations
+            Self::EthicsHarmToOther => "Ethics: Harm to Other",
+            Self::EthicsParasitism => "Ethics: Parasitism",
+            Self::EthicsLoopBreaking => "Ethics: Loop Breaking",
+            Self::EthicsNoMutualBenefit => "Ethics: No Mutual Benefit",
+            Self::EthicsRelationshipDegrading => "Ethics: Relationship Degrading",
         }
     }
 
     /// Check if this is a critical anomaly that should halt training
     pub fn is_critical(&self) -> bool {
         self.severity() >= 3
+    }
+
+    /// Check if this is an ethics-related anomaly
+    pub fn is_ethics_violation(&self) -> bool {
+        matches!(
+            self,
+            Self::EthicsHarmToOther
+                | Self::EthicsParasitism
+                | Self::EthicsLoopBreaking
+                | Self::EthicsNoMutualBenefit
+                | Self::EthicsRelationshipDegrading
+        )
     }
 }
 
@@ -701,8 +738,8 @@ pub struct AnomalyStats {
     pub total_anomalies: u64,
     /// Critical anomalies
     pub critical_anomalies: u64,
-    /// Anomalies by type
-    pub by_type: [u64; 13],
+    /// Anomalies by type (18 types: 13 original + 5 ethics)
+    pub by_type: [u64; 18],
     /// Last anomaly step
     pub last_anomaly_step: Option<u64>,
 }
@@ -750,6 +787,12 @@ impl AnomalyMonitor {
             AnomalyType::NumericalInstability => 10,
             AnomalyType::DeadNeuron => 11,
             AnomalyType::SaturatedNeuron => 12,
+            // Ethics violations (indices 13-17)
+            AnomalyType::EthicsHarmToOther => 13,
+            AnomalyType::EthicsParasitism => 14,
+            AnomalyType::EthicsLoopBreaking => 15,
+            AnomalyType::EthicsNoMutualBenefit => 16,
+            AnomalyType::EthicsRelationshipDegrading => 17,
         };
         self.stats.by_type[type_idx] += 1;
         self.stats.last_anomaly_step = Some(self.step);
