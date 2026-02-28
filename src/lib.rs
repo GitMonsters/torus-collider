@@ -119,6 +119,9 @@ pub mod memory;
 // AGI signifier evaluation
 pub mod agi_signifier_test;
 
+// Genus-13 multi-surface torus (independent + keyring topologies)
+pub mod genus13;
+
 // Integration tests
 #[cfg(test)]
 mod tests;
