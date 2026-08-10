@@ -1229,6 +1229,497 @@ impl KeyringTorus {
 // COMPARISON: both topologies side by side
 // ============================================================
 
+// ============================================================
+// VARIANT C: RECURSIVE/FRACTAL KEYRING (Meta-Keyring)
+// ============================================================
+//
+// Each "key" on the meta-keyring is itself a full KeyringTorus (1 ring + 12 satellites).
+// This creates a hierarchical topology:
+//
+// Level 1 (base):     1 ring + 12 satellites = 13 tori = ~1.7T params
+// Level 2 (meta):     1 meta-ring + 12 meta-satellites = 13 × 13 = 169 tori = ~22T params
+// Level 3 (meta-meta): 13 × 13 × 13 = 2197 tori = ~289T params
+//
+// Information flows:
+// - Within each base keyring: ring↔satellite junctions every layer
+// - Across meta-keyring: meta-ring connects all base keyrings via meta-junctions
+// - This enables hierarchical specialization: meta-ring = global strategy,
+//   base rings = domain expertise, base satellites = sub-domain expertise
+
+/// A single base keyring unit (1 central ring + 12 satellites)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseKeyringUnit {
+    /// The keyring configuration for this unit
+    pub config: KeyringConfig,
+    /// Unique identifier for this unit in the meta-keyring
+    pub unit_id: usize,
+    /// Domain specialization of this entire keyring unit
+    pub domain: MetaDomain,
+    /// Position on the meta-ring (radians)
+    pub meta_angle: f64,
+}
+
+/// Meta-domain specialization for each base keyring unit
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MetaDomain {
+    // Core cognitive domains
+    Memory,           // 0: Episodic + working memory systems
+    Planning,         // 1: Hierarchical planning + goal decomposition
+    Language,         // 2: Linguistic processing + communication
+    Spatial,          // 3: Spatial reasoning + navigation
+    Reasoning,        // 4: Logical deduction + proof
+    Emotional,        // 5: Valence + motivation + affect
+    Pattern,          // 6: Pattern recognition + analogy
+    Causal,           // 7: Causal inference + counterfactuals
+    Creative,         // 8: Novel combination + imagination
+    MetaCognition,    // 9: Self-monitoring + confidence calibration
+    Perception,       // 10: Sensory integration + encoding
+    Action,           // 11: Motor planning + execution
+    // Meta-cognitive / orchestration domains
+    Orchestration,    // 12: Coordinating other keyrings (meta-ring's job)
+}
+
+impl MetaDomain {
+    pub fn all() -> [MetaDomain; 13] {
+        [
+            MetaDomain::Memory,
+            MetaDomain::Planning,
+            MetaDomain::Language,
+            MetaDomain::Spatial,
+            MetaDomain::Reasoning,
+            MetaDomain::Emotional,
+            MetaDomain::Pattern,
+            MetaDomain::Causal,
+            MetaDomain::Creative,
+            MetaDomain::MetaCognition,
+            MetaDomain::Perception,
+            MetaDomain::Action,
+            MetaDomain::Orchestration,
+        ]
+    }
+
+    pub fn index(&self) -> usize {
+        *self as usize
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            MetaDomain::Memory => "Memory",
+            MetaDomain::Planning => "Planning",
+            MetaDomain::Language => "Language",
+            MetaDomain::Spatial => "Spatial",
+            MetaDomain::Reasoning => "Reasoning",
+            MetaDomain::Emotional => "Emotional",
+            MetaDomain::Pattern => "Pattern",
+            MetaDomain::Causal => "Causal",
+            MetaDomain::Creative => "Creative",
+            MetaDomain::MetaCognition => "MetaCognition",
+            MetaDomain::Perception => "Perception",
+            MetaDomain::Action => "Action",
+            MetaDomain::Orchestration => "Orchestration",
+        }
+    }
+}
+
+/// Configuration for the recursive meta-keyring topology
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaKeyringConfig {
+    /// Base keyring config (used for all 13 units)
+    pub base_config: KeyringConfig,
+    /// Meta-ring model dimension (orchestration layer)
+    pub meta_ring_d_model: usize,
+    /// Meta-ring feed-forward dimension
+    pub meta_ring_d_ff: usize,
+    /// Meta-ring attention heads
+    pub meta_ring_n_heads: usize,
+    /// Meta-ring layers
+    pub meta_ring_n_layers: usize,
+    /// Number of base keyring units (always 13 for genus-13 recursion)
+    pub n_base_units: usize,
+    /// Meta-junction dimension (meta-ring ↔ base-keyring exchange)
+    pub meta_junction_dim: usize,
+    /// Meta-junction transfer weight
+    pub meta_junction_alpha: f64,
+    /// Grid size for meta-ring
+    pub meta_ring_n_major: usize,
+    pub meta_ring_n_minor: usize,
+    /// Dropout
+    pub dropout: f64,
+}
+
+impl MetaKeyringConfig {
+    /// Total number of base torus units: 13 base units × 13 tori each = 169
+    pub fn total_base_tori(&self) -> usize {
+        self.n_base_units * 13 // 1 ring + 12 sats per base unit
+    }
+
+    /// Total streams: meta-ring (8) + 13 base units × 104 streams each
+    pub fn total_streams(&self) -> usize {
+        8 + self.n_base_units * 104
+    }
+
+    /// Estimated total parameter count
+    pub fn param_count(&self) -> u64 {
+        // Base keyrings: 13 × base_config params
+        let base_params = self.base_config.param_count() * self.n_base_units as u64;
+
+        // Meta-ring: 8 streams × (Q,K,V,O) + FFN
+        let mrd = self.meta_ring_d_model as u64;
+        let mrff = self.meta_ring_d_ff as u64;
+        let mrl = self.meta_ring_n_layers as u64;
+
+        let meta_attn = mrd * mrd * 4 * 8 * mrl;
+        let meta_ff = mrd * mrff * 2 * mrl;
+        let meta_norm = 2 * mrd * mrl;
+
+        // Meta-junctions: bidirectional projection meta_ring ↔ base_ring
+        // Each base unit has its own central ring (d_model = base_config.ring_d_model)
+        let brd = self.base_config.ring_d_model as u64;
+        let mjd = self.meta_junction_dim as u64;
+        let nb = self.n_base_units as u64;
+
+        // meta-ring → base-ring: meta_d_model → junction_dim → base_d_model
+        // base-ring → meta-ring: base_d_model → junction_dim → meta_d_model
+        let meta_junction_per_unit = mrd * mjd + mjd * brd + brd * mjd + mjd * mrd;
+        let meta_junctions = meta_junction_per_unit * nb;
+
+        // Embeddings + output (shared, meta-ring dimension)
+        let vocab_size = 100_277u64;
+        let embeddings = vocab_size * mrd + (self.meta_ring_n_major * self.meta_ring_n_minor) as u64 * mrd;
+        let output = mrd * vocab_size;
+
+        base_params + meta_attn + meta_ff + meta_norm + meta_junctions + embeddings + output
+    }
+
+    /// Human-readable param count
+    pub fn param_count_human(&self) -> String {
+        let p = self.param_count();
+        if p >= 1_000_000_000_000 {
+            format!("{:.2}T", p as f64 / 1e12)
+        } else if p >= 1_000_000_000 {
+            format!("{:.2}B", p as f64 / 1e9)
+        } else if p >= 1_000_000 {
+            format!("{:.1}M", p as f64 / 1e6)
+        } else {
+            format!("{}K", p / 1000)
+        }
+    }
+
+    /// The ~22T recursive keyring configuration (13 × keyring_1_7t)
+    pub fn meta_keyring_22t() -> Self {
+        Self {
+            base_config: KeyringConfig::keyring_1_7t(),
+            meta_ring_d_model: 8192,
+            meta_ring_d_ff: 32768,
+            meta_ring_n_heads: 64,
+            meta_ring_n_layers: 32,  // Meta-ring has fewer layers (orchestration only)
+            n_base_units: 13,
+            meta_junction_dim: 4096,  // Larger junction for meta↔base exchange
+            meta_junction_alpha: 0.2,
+            meta_ring_n_major: 64,
+            meta_ring_n_minor: 32,
+            dropout: 0.05,
+        }
+    }
+
+    /// Nano version for testing
+    pub fn nano() -> Self {
+        let base = KeyringConfig::nano();
+        Self {
+            base_config: base.clone(),
+            meta_ring_d_model: 256,
+            meta_ring_d_ff: 1024,
+            meta_ring_n_heads: 8,
+            meta_ring_n_layers: 4,
+            n_base_units: 13,
+            meta_junction_dim: 64,
+            meta_junction_alpha: 0.3,
+            meta_ring_n_major: 16,
+            meta_ring_n_minor: 8,
+            dropout: 0.1,
+        }
+    }
+}
+
+impl Default for MetaKeyringConfig {
+    fn default() -> Self {
+        Self::meta_keyring_22t()
+    }
+}
+
+impl fmt::Display for MetaKeyringConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "MetaKeyringConfig({}×base={}, meta_ring={}d×{}L, meta_streams={}, total_tori={}, params={})",
+            self.n_base_units,
+            self.base_config.param_count_human(),
+            self.meta_ring_d_model,
+            self.meta_ring_n_layers,
+            8,
+            self.total_base_tori(),
+            self.param_count_human(),
+        )
+    }
+}
+
+/// Meta-junction: connects meta-ring to a base keyring unit
+#[derive(Debug, Clone)]
+pub struct MetaJunction {
+    /// Which base unit this connects to
+    pub base_unit_id: usize,
+    /// Domain of the base unit
+    pub domain: MetaDomain,
+    /// Angular position on meta-ring
+    pub angle: f64,
+    /// Meta-ring → base-ring buffer
+    pub meta_to_base: Vec<f64>,
+    /// Base-ring → meta-ring buffer
+    pub base_to_meta: Vec<f64>,
+    /// Junction dimension
+    pub junction_dim: usize,
+    /// Transfer weight
+    pub alpha: f64,
+    /// Transfer count
+    pub transfers: usize,
+}
+
+impl MetaJunction {
+    pub fn new(base_unit_id: usize, config: &MetaKeyringConfig) -> Self {
+        let angle = 2.0 * std::f64::consts::PI * base_unit_id as f64 / config.n_base_units as f64;
+        let domain = MetaDomain::all()[base_unit_id % 13];
+
+        Self {
+            base_unit_id,
+            domain,
+            angle,
+            meta_to_base: vec![0.0; config.meta_junction_dim],
+            base_to_meta: vec![0.0; config.meta_junction_dim],
+            junction_dim: config.meta_junction_dim,
+            alpha: config.meta_junction_alpha,
+            transfers: 0,
+        }
+    }
+
+    /// Transfer from meta-ring to base keyring's central ring
+    pub fn meta_to_base_ring(&mut self, meta_hidden: &[f64], base_ring_state: &mut [f64]) {
+        let jd = self.junction_dim;
+        for i in 0..jd {
+            self.meta_to_base[i] = if i < meta_hidden.len() { meta_hidden[i] } else { 0.0 };
+        }
+        let len = base_ring_state.len().min(jd);
+        for i in 0..len {
+            base_ring_state[i] = (1.0 - self.alpha) * base_ring_state[i] + self.alpha * self.meta_to_base[i];
+        }
+        self.transfers += 1;
+    }
+
+    /// Transfer from base keyring's central ring to meta-ring
+    pub fn base_ring_to_meta(&mut self, base_ring_hidden: &[f64], meta_state: &mut [f64]) {
+        let jd = self.junction_dim;
+        for i in 0..jd {
+            self.base_to_meta[i] = if i < base_ring_hidden.len() { base_ring_hidden[i] } else { 0.0 };
+        }
+        let len = meta_state.len().min(jd);
+        for i in 0..len {
+            meta_state[i] = (1.0 - self.alpha) * meta_state[i] + self.alpha * self.base_to_meta[i];
+        }
+        self.transfers += 1;
+    }
+}
+
+/// The full recursive meta-keyring: 13 base keyrings on a meta-ring
+#[derive(Debug, Clone)]
+pub struct MetaKeyringTorus {
+    pub config: MetaKeyringConfig,
+    /// Meta-ring hidden state
+    pub meta_ring_state: Vec<f64>,
+    /// Base keyring units (each is a full KeyringTorus)
+    pub base_units: Vec<KeyringTorus>,
+    /// Meta-junctions (one per base unit)
+    pub meta_junctions: Vec<MetaJunction>,
+    /// Current layer index
+    pub current_layer: usize,
+    /// Forward pass count
+    pub forward_count: usize,
+    /// Base unit activity tracking
+    pub base_unit_activity: Vec<f64>,
+}
+
+impl MetaKeyringTorus {
+    pub fn new(config: MetaKeyringConfig) -> Self {
+        let n_units = config.n_base_units;
+        let base_config = config.base_config.clone();
+
+        // Create 13 base keyring units
+        let base_units: Vec<KeyringTorus> = (0..n_units)
+            .map(|_| {
+                let unit = KeyringTorus::new(base_config.clone());
+                unit
+            })
+            .collect();
+
+        // Create meta-junctions
+        let meta_junctions: Vec<MetaJunction> = (0..n_units)
+            .map(|i| MetaJunction::new(i, &config))
+            .collect();
+
+        Self {
+            meta_ring_state: vec![0.0; config.meta_ring_d_model],
+            base_units,
+            meta_junctions,
+            base_unit_activity: vec![0.0; n_units],
+            current_layer: 0,
+            forward_count: 0,
+            config,
+        }
+    }
+
+    /// Forward pass for one meta-layer
+    pub fn forward_layer(
+        &mut self,
+        meta_input: &[f64],
+        base_inputs: &mut [Vec<Vec<f64>>], // [base_unit][ring_or_satellite]
+    ) -> (Vec<f64>, Vec<Vec<Vec<f64>>>) {
+        assert_eq!(base_inputs.len(), self.config.n_base_units);
+
+        // Step 1: Meta-ring attention
+        let mut meta_out = meta_input.to_vec();
+        let scale = 1.0 / (meta_out.len() as f64).sqrt();
+        for v in meta_out.iter_mut() {
+            *v *= scale;
+            *v = *v * 0.5 * (1.0 + (*v * 0.7978845608).tanh());
+        }
+
+        // Step 2: Meta-ring → base keyring central rings via meta-junctions
+        for (unit_idx, junction) in self.meta_junctions.iter_mut().enumerate() {
+            let base_ring_input = &mut base_inputs[unit_idx][0]; // First is ring input
+            junction.meta_to_base_ring(&meta_out, base_ring_input);
+        }
+
+        // Step 3: Each base keyring processes independently
+        let mut base_outputs = Vec::with_capacity(self.config.n_base_units);
+        for (unit_idx, base_unit) in self.base_units.iter_mut().enumerate() {
+            let (ring_out, sat_outs) = base_unit.forward_layer(
+                &base_inputs[unit_idx][0],
+                &base_inputs[unit_idx][1..],
+            );
+            let mut unit_outputs = vec![ring_out];
+            unit_outputs.extend(sat_outs);
+            base_outputs.push(unit_outputs);
+        }
+
+        // Step 4: Base keyring central rings → meta-ring via meta-junctions
+        for (unit_idx, junction) in self.meta_junctions.iter_mut().enumerate() {
+            let base_ring_out = &base_outputs[unit_idx][0];
+            junction.base_ring_to_meta(base_ring_out, &mut meta_out);
+
+            // Track base unit activity
+            let activity: f64 = base_ring_out.iter().map(|x| x * x).sum::<f64>().sqrt();
+            self.base_unit_activity[unit_idx] =
+                0.9 * self.base_unit_activity[unit_idx] + 0.1 * activity;
+        }
+
+        self.meta_ring_state = meta_out.clone();
+        self.current_layer += 1;
+
+        (meta_out, base_outputs)
+    }
+
+    /// Full forward pass
+    pub fn forward(
+        &mut self,
+        meta_input: &[f64],
+        base_inputs: &mut [Vec<Vec<f64>>],
+    ) -> (Vec<f64>, Vec<Vec<Vec<f64>>>) {
+        let mut meta = meta_input.to_vec();
+        let mut bases = base_inputs.to_vec();
+
+        self.current_layer = 0;
+        for _layer in 0..self.config.meta_ring_n_layers {
+            let (new_meta, new_bases) = self.forward_layer(&meta, &mut bases);
+            meta = new_meta;
+            bases = new_bases;
+        }
+
+        self.forward_count += 1;
+        (meta, bases)
+    }
+
+    /// Most active base units
+    pub fn active_base_units(&self) -> Vec<(MetaDomain, f64)> {
+        let mut ranked: Vec<(MetaDomain, f64)> = MetaDomain::all()
+            .iter()
+            .enumerate()
+            .take(self.config.n_base_units)
+            .map(|(i, &domain)| (domain, self.base_unit_activity[i]))
+            .collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked
+    }
+
+    pub fn summary(&self) -> String {
+        let top_units: Vec<String> = self.active_base_units()
+            .iter()
+            .take(3)
+            .map(|(d, a)| format!("{}={:.3}", d.name(), a))
+            .collect();
+
+        format!(
+            "MetaKeyringTorus: {}×base_keyrings, meta_ring={}d×{}L, total_tori={}, total_streams={}, params={}, top_units=[{}]",
+            self.config.n_base_units,
+            self.config.meta_ring_d_model,
+            self.config.meta_ring_n_layers,
+            self.config.total_base_tori(),
+            self.config.total_streams(),
+            self.config.param_count_human(),
+            top_units.join(", "),
+        )
+    }
+}
+
+/// Compare all three topologies
+pub fn compare_all_topologies() -> String {
+    let indep = Genus13Config::giant();
+    let keyring = KeyringConfig::keyring_1_7t();
+    let meta = MetaKeyringConfig::meta_keyring_22t();
+
+    format!(
+        "╔════════════════════════════════════════════════════════════════════════════════════╗\n\
+         ║           GENUS-13 TOPOLOGY COMPARISON (3 Variants)                               ║\n\
+         ╠═════════════════════════════════════════════════════════════════════════════════╣\n\
+         ║                    │ Independent   │ Keyring (1.7T) │ Meta-Keyring (22T)         ║\n\
+         ╠═════════════════════════════════════════════════════════════════════════════════╣\n\
+         ║ Genus (tori)       │ {:<13} │ {:<14} │ {:<24} ║\n\
+         ║ Total streams      │ {:<13} │ {:<14} │ {:<24} ║\n\
+         ║ Hierarchy levels   │ {:<13} │ {:<14} │ {:<24} ║\n\
+         ║ Ring d_model       │ {:<13} │ {:<14} │ {:<24} ║\n\
+         ║ Ring layers        │ {:<13} │ {:<14} │ {:<24} ║\n\
+         ║ Total params       │ {:<13} │ {:<14} │ {:<24} ║\n\
+         ║ Info flow          │ {:<13} │ {:<14} │ {:<24} ║\n\
+         ║ Specialization     │ {:<13} │ {:<14} │ {:<24} ║\n\
+         ╚═════════════════════════════════════════════════════════════════════════════════╝",
+        indep.genus,
+        keyring.genus(),
+        meta.total_base_tori(),
+        indep.total_streams(),
+        keyring.total_streams(),
+        meta.total_streams(),
+        "1 (flat)", "2 (ring+sat)", "3 (meta+ring+sat)",
+        indep.d_model,
+        keyring.ring_d_model,
+        meta.meta_ring_d_model,
+        indep.n_layers,
+        keyring.ring_n_layers,
+        meta.meta_ring_n_layers,
+        indep.param_count_human(),
+        keyring.param_count_human(),
+        meta.param_count_human(),
+        "bridge @4L", "junction @L", "meta-junc @L + junc @L",
+        "none", "12 domains", "13 meta-domains",
+    )
+}
+
 /// Compare the two topology variants
 pub fn compare_topologies() -> String {
     let indep = Genus13Config::giant();
@@ -1701,5 +2192,180 @@ mod tests {
                 "junction spacing should be uniform, got {}", diff
             );
         }
+    }
+
+    // ============================================================
+    // META-KEYRING (RECURSIVE) TESTS
+    // ============================================================
+
+    #[test]
+    fn test_meta_keyring_nano_config() {
+        let cfg = MetaKeyringConfig::nano();
+        assert_eq!(cfg.n_base_units, 13);
+        assert_eq!(cfg.total_base_tori(), 169);
+        assert_eq!(cfg.total_streams(), 8 + 13 * 104);
+        assert_eq!(cfg.meta_ring_d_model, 256);
+        println!("meta-keyring nano: {}", cfg);
+    }
+
+    #[test]
+    fn test_meta_keyring_22t_config() {
+        let cfg = MetaKeyringConfig::meta_keyring_22t();
+        assert_eq!(cfg.n_base_units, 13);
+        assert_eq!(cfg.total_base_tori(), 169);
+        assert_eq!(cfg.total_streams(), 8 + 13 * 104);
+        assert_eq!(cfg.meta_ring_d_model, 8192);
+        let params = cfg.param_count();
+        assert!(params > 10_000_000_000_000, "should be >10T, got {}", params);
+        assert!(params < 50_000_000_000_000, "should be <50T, got {}", params);
+        println!("meta-keyring 22T: {} ({} params)", cfg, params);
+    }
+
+    #[test]
+    fn test_meta_keyring_param_count_human() {
+        assert!(MetaKeyringConfig::nano().param_count_human().contains("M") || MetaKeyringConfig::nano().param_count_human().contains("B"));
+        assert!(MetaKeyringConfig::meta_keyring_22t().param_count_human().contains("T"));
+    }
+
+    #[test]
+    fn test_meta_domains() {
+        let domains = MetaDomain::all();
+        assert_eq!(domains.len(), 13);
+        assert_eq!(domains[0], MetaDomain::Memory);
+        assert_eq!(domains[12], MetaDomain::Orchestration);
+        for (i, d) in domains.iter().enumerate() {
+            assert_eq!(d.index(), i);
+            assert!(!d.name().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_meta_junction_creation() {
+        let cfg = MetaKeyringConfig::nano();
+        let j = MetaJunction::new(0, &cfg);
+        assert_eq!(j.base_unit_id, 0);
+        assert_eq!(j.domain, MetaDomain::Memory);
+        assert!((j.angle - 0.0).abs() < 1e-10);
+        assert_eq!(j.junction_dim, 64);
+        assert_eq!(j.transfers, 0);
+    }
+
+    #[test]
+    fn test_meta_junction_transfer() {
+        let cfg = MetaKeyringConfig::nano();
+        let mut j = MetaJunction::new(0, &cfg);
+
+        let meta_hidden = vec![1.0; cfg.meta_ring_d_model];
+        let mut base_ring_state = vec![0.0; cfg.base_config.ring_d_model];
+
+        j.meta_to_base_ring(&meta_hidden, &mut base_ring_state);
+        assert_eq!(j.transfers, 1);
+        assert!(base_ring_state.iter().any(|&v| v.abs() > 1e-10));
+
+        let base_ring_hidden = vec![2.0; cfg.base_config.ring_d_model];
+        let mut meta_state = vec![0.0; cfg.meta_ring_d_model];
+        j.base_ring_to_meta(&base_ring_hidden, &mut meta_state);
+        assert_eq!(j.transfers, 2);
+        assert!(meta_state.iter().any(|&v| v.abs() > 1e-10));
+    }
+
+    #[test]
+    fn test_meta_keyring_torus_creation() {
+        let cfg = MetaKeyringConfig::nano();
+        let torus = MetaKeyringTorus::new(cfg.clone());
+        assert_eq!(torus.base_units.len(), 13);
+        assert_eq!(torus.meta_junctions.len(), 13);
+        assert_eq!(torus.meta_ring_state.len(), cfg.meta_ring_d_model);
+        assert_eq!(torus.base_unit_activity.len(), 13);
+    }
+
+    #[test]
+    fn test_meta_keyring_forward_layer() {
+        let cfg = MetaKeyringConfig::nano();
+        let mut torus = MetaKeyringTorus::new(cfg.clone());
+
+        let meta_input = vec![1.0; cfg.meta_ring_d_model];
+        let mut base_inputs: Vec<Vec<Vec<f64>>> = (0..13)
+            .map(|_| {
+                let ring = vec![0.5; cfg.base_config.ring_d_model];
+                let sats = vec![vec![0.5; cfg.base_config.sat_d_model]; 12];
+                let mut unit = vec![ring];
+                unit.extend(sats);
+                unit
+            })
+            .collect();
+
+        let (meta_out, base_outs) = torus.forward_layer(&meta_input, &mut base_inputs);
+        assert_eq!(meta_out.len(), cfg.meta_ring_d_model);
+        assert_eq!(base_outs.len(), 13);
+        for unit_out in &base_outs {
+            assert_eq!(unit_out.len(), 13);
+            assert_eq!(unit_out[0].len(), cfg.base_config.ring_d_model);
+        }
+    }
+
+    #[test]
+    fn test_meta_keyring_full_forward() {
+        let cfg = MetaKeyringConfig::nano();
+        let mut torus = MetaKeyringTorus::new(cfg.clone());
+
+        let meta_input = vec![0.5; cfg.meta_ring_d_model];
+        let mut base_inputs: Vec<Vec<Vec<f64>>> = (0..13)
+            .map(|_| {
+                let ring = vec![0.5; cfg.base_config.ring_d_model];
+                let sats = vec![vec![0.5; cfg.base_config.sat_d_model]; 12];
+                let mut unit = vec![ring];
+                unit.extend(sats);
+                unit
+            })
+            .collect();
+
+        let (meta_out, base_outs) = torus.forward(&meta_input, &mut base_inputs);
+        assert_eq!(meta_out.len(), cfg.meta_ring_d_model);
+        assert_eq!(base_outs.len(), 13);
+        assert_eq!(torus.forward_count, 1);
+    }
+
+    #[test]
+    fn test_meta_keyring_active_base_units() {
+        let cfg = MetaKeyringConfig::nano();
+        let mut torus = MetaKeyringTorus::new(cfg.clone());
+
+        let meta_input = vec![1.0; cfg.meta_ring_d_model];
+        let mut base_inputs: Vec<Vec<Vec<f64>>> = (0..13)
+            .map(|i| {
+                let ring = vec![(i as f64 + 1.0) * 0.1; cfg.base_config.ring_d_model];
+                let sats = vec![vec![0.1; cfg.base_config.sat_d_model]; 12];
+                let mut unit = vec![ring];
+                unit.extend(sats);
+                unit
+            })
+            .collect();
+        torus.forward(&meta_input, &mut base_inputs);
+
+        let active = torus.active_base_units();
+        assert_eq!(active.len(), 13);
+        assert_eq!(active[0].0, MetaDomain::Orchestration);
+    }
+
+    #[test]
+    fn test_meta_keyring_summary() {
+        let cfg = MetaKeyringConfig::nano();
+        let torus = MetaKeyringTorus::new(cfg);
+        let summary = torus.summary();
+        assert!(summary.contains("MetaKeyringTorus"));
+        assert!(summary.contains("13×base_keyrings"));
+        assert!(summary.contains("total_tori=169"));
+        println!("{}", summary);
+    }
+
+    #[test]
+    fn test_compare_all_topologies() {
+        let comparison = compare_all_topologies();
+        assert!(comparison.contains("Independent"));
+        assert!(comparison.contains("Keyring"));
+        assert!(comparison.contains("Meta-Keyring"));
+        assert!(comparison.contains("169"));
+        println!("{}", comparison);
     }
 }
